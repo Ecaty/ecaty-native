@@ -5,9 +5,9 @@ namespace flecs_unity {
 
 void register_application(flecs::world& world) {
     world.component<ecaty::Spin>("Spin")
-        .member("x", &ecaty::Spin::x)
-        .member("y", &ecaty::Spin::y)
-        .member("z", &ecaty::Spin::z);
+        .member(&ecaty::Spin::x, "x")
+        .member(&ecaty::Spin::y, "y")
+        .member(&ecaty::Spin::z, "z");
 
     using ecaty::Spin;
     world.system<Rotation, const Spin>("SpinSystem")

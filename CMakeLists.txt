@@ -13,3 +13,7 @@ endif()
 add_custom_command(TARGET flecs_unity POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "${UNITY_PLUGIN_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:flecs_unity>" "${UNITY_PLUGIN_DIR}/$<TARGET_FILE_NAME:flecs_unity>")
+
+if(MINGW)
+  target_link_options(flecs_unity PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
