@@ -17,3 +17,9 @@ add_custom_command(TARGET flecs_unity POST_BUILD
 if(MINGW)
   target_link_options(flecs_unity PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
+
+if(ANDROID)
+  # Ninja on Windows shortens the NDK path (it contains spaces) and the short clang++ name
+  # links in C mode, so name the static C++ runtime explicitly.
+  target_link_libraries(flecs_unity PRIVATE c++_static c++abi)
+endif()
