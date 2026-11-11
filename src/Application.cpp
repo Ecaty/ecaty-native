@@ -3,7 +3,9 @@
 
 namespace flecs_unity {
 
-void register_application(flecs::world& world) {
+namespace {
+
+void register_spin(flecs::world& world) {
     world.component<ecaty::Spin>("Spin")
         .member(&ecaty::Spin::x, "x")
         .member(&ecaty::Spin::y, "y")
@@ -19,6 +21,92 @@ void register_application(flecs::world& world) {
             rotation.z = std::fmod(rotation.z + speed.z * dt, 360.0f);
             it.entity(row).modified<Rotation>();
         });
+}
+
+double tree_rate(const flecs::world& w) {
+    const flecs::entity settings = w.lookup("GalleryTreeSettings");
+    const ecaty::GalleryTreeActivity* activity = settings ? settings.try_get<ecaty::GalleryTreeActivity>() : nullptr;
+    return activity ? activity->rate : 1.0;
+}
+
+void update_layer(flecs::entity e, const ecaty::GalleryLayerIntent& intent, double now, double rate) {
+    const float turn = static_cast<float>(intent.angle + (now - intent.started) * intent.speed * rate);
+    const ecaty::GalleryLayerState* current = e.try_get<ecaty::GalleryLayerState>();
+    if (!current || current->turn != turn) e.set<ecaty::GalleryLayerState>({turn});
+}
+
+void update_tree(flecs::entity e, const ecaty::GalleryTreeActivity& activity, double now) {
+    const float time = static_cast<float>(activity.elapsed + (now - activity.started) * activity.rate);
+    const ecaty::GalleryTreeMotion* current = e.try_get<ecaty::GalleryTreeMotion>();
+    if (!current || current->time != time) e.set<ecaty::GalleryTreeMotion>({time});
+}
+
+double now(const flecs::world& w) {
+    const Clock* clock = w.try_get<Clock>();
+    return clock ? clock->time : 0.0;
+}
+
+// Continuous gallery motion runs as compiled systems (docs/FLECS-ARCHITECTURE-AUDIT.md):
+// Script/C# write intents and activity; systems integrate them against Clock every tick, and
+// observers apply a write immediately so same-frame reads match the former reactive Script.
+void register_gallery_motion(flecs::world& world) {
+    using namespace ecaty;
+    world.component<GalleryTreeActivity>("GalleryTreeActivity")
+        .member(&GalleryTreeActivity::rate, "rate")
+        .member(&GalleryTreeActivity::draft, "draft")
+        .member(&GalleryTreeActivity::sequence, "sequence")
+        .member(&GalleryTreeActivity::elapsed, "elapsed")
+        .member(&GalleryTreeActivity::started, "started");
+    world.component<GalleryTreeMotion>("GalleryTreeMotion")
+        .member(&GalleryTreeMotion::time, "time");
+    world.component<GalleryLayerIntent>("GalleryLayerIntent")
+        .member(&GalleryLayerIntent::angle, "angle")
+        .member(&GalleryLayerIntent::speed, "speed")
+        .member(&GalleryLayerIntent::started, "started")
+        .member(&GalleryLayerIntent::glowPhase, "glowPhase")
+        .member(&GalleryLayerIntent::glowRate, "glowRate");
+    world.component<GalleryLayerState>("GalleryLayerState")
+        .member(&GalleryLayerState::turn, "turn");
+
+    // Tree motion clock: elapsed + (now - started) * rate.
+    world.system<const GalleryTreeActivity>("GalleryTreeMotionSystem")
+        .kind(flecs::PreUpdate)
+        .each([](flecs::entity e, const GalleryTreeActivity& activity) { update_tree(e, activity, now(e.world())); });
+
+    // Ring turn: angle + (now - started) * speed * tree rate.
+    world.system<const GalleryLayerIntent>("GalleryRingMotionSystem")
+        .kind(flecs::PreUpdate)
+        .run([](flecs::iter& it) {
+            const flecs::world w = it.world();
+            const double t = now(w), rate = tree_rate(w);
+            while (it.next()) {
+                auto intent = it.field<const GalleryLayerIntent>(0);
+                for (auto i : it) update_layer(it.entity(i), intent[i], t, rate);
+            }
+        });
+
+    world.observer<const GalleryLayerIntent>("GalleryRingIntentObserver")
+        .event(flecs::OnSet)
+        .each([](flecs::entity e, const GalleryLayerIntent& intent) {
+            const flecs::world w = e.world();
+            update_layer(e, intent, now(w), tree_rate(w));
+        });
+
+    world.observer<const GalleryTreeActivity>("GalleryTreeActivityObserver")
+        .event(flecs::OnSet)
+        .each([](flecs::entity e, const GalleryTreeActivity& activity) {
+            const flecs::world w = e.world();
+            const double t = now(w);
+            update_tree(e, activity, t);
+            w.each([&](flecs::entity layer, const GalleryLayerIntent& intent) { update_layer(layer, intent, t, activity.rate); });
+        });
+}
+
+} // namespace
+
+void register_application(flecs::world& world) {
+    register_spin(world);
+    register_gallery_motion(world);
 }
 
 } // namespace flecs_unity
