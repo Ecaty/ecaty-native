@@ -5,23 +5,29 @@ namespace flecs_unity {
 
 namespace {
 
-void register_spin(flecs::world& world) {
+void register_spin_components(flecs::world& world) {
     world.component<game::Spin>("Spin")
         .member(&game::Spin::x, "x")
         .member(&game::Spin::y, "y")
         .member(&game::Spin::z, "z");
-
-    using game::Spin;
-    world.system<Rotation, const Spin>("SpinSystem")
-        .term_at(0).self() // Write an entity's own rotation, never its prefab's.
-        .each([](flecs::iter& it, std::size_t row, Rotation& rotation, const Spin& speed) {
-            const auto dt = static_cast<float>(it.delta_time());
-            rotation.x = std::fmod(rotation.x + speed.x * dt, 360.0f);
-            rotation.y = std::fmod(rotation.y + speed.y * dt, 360.0f);
-            rotation.z = std::fmod(rotation.z + speed.z * dt, 360.0f);
-            it.entity(row).modified<Rotation>();
-        });
 }
+
+// Systems live in modules (see FlecsComponents.hpp); components stay at the root.
+struct SpinModule {
+    explicit SpinModule(flecs::world& world) {
+        world.module<SpinModule>("engine::spin");
+        using game::Spin;
+        world.system<Rotation, const Spin>("SpinSystem")
+            .term_at(0).self() // Write an entity's own rotation, never its prefab's.
+            .each([](flecs::iter& it, std::size_t row, Rotation& rotation, const Spin& speed) {
+                const auto dt = static_cast<float>(it.delta_time());
+                rotation.x = std::fmod(rotation.x + speed.x * dt, 360.0f);
+                rotation.y = std::fmod(rotation.y + speed.y * dt, 360.0f);
+                rotation.z = std::fmod(rotation.z + speed.z * dt, 360.0f);
+                it.entity(row).modified<Rotation>();
+            });
+    }
+};
 
 double tree_rate(const flecs::world& w) {
     const flecs::entity settings = w.lookup("GalleryTreeSettings");
@@ -49,7 +55,7 @@ double now(const flecs::world& w) {
 // Continuous gallery motion runs as compiled systems (docs/FLECS-ARCHITECTURE-AUDIT.md):
 // Script/C# write intents and activity; systems integrate them against Clock every tick, and
 // observers apply a write immediately so same-frame reads match the former reactive Script.
-void register_gallery_motion(flecs::world& world) {
+void register_gallery_components(flecs::world& world) {
     using namespace game;
     world.component<GalleryTreeActivity>("GalleryTreeActivity")
         .member(&GalleryTreeActivity::rate, "rate")
@@ -67,46 +73,56 @@ void register_gallery_motion(flecs::world& world) {
         .member(&GalleryLayerIntent::glowRate, "glowRate");
     world.component<GalleryLayerState>("GalleryLayerState")
         .member(&GalleryLayerState::turn, "turn");
-
-    // Tree motion clock: elapsed + (now - started) * rate.
-    world.system<const GalleryTreeActivity>("GalleryTreeMotionSystem")
-        .kind(flecs::PreUpdate)
-        .each([](flecs::entity e, const GalleryTreeActivity& activity) { update_tree(e, activity, now(e.world())); });
-
-    // Ring turn: angle + (now - started) * speed * tree rate.
-    world.system<const GalleryLayerIntent>("GalleryRingMotionSystem")
-        .kind(flecs::PreUpdate)
-        .run([](flecs::iter& it) {
-            const flecs::world w = it.world();
-            const double t = now(w), rate = tree_rate(w);
-            while (it.next()) {
-                auto intent = it.field<const GalleryLayerIntent>(0);
-                for (auto i : it) update_layer(it.entity(i), intent[i], t, rate);
-            }
-        });
-
-    world.observer<const GalleryLayerIntent>("GalleryRingIntentObserver")
-        .event(flecs::OnSet)
-        .each([](flecs::entity e, const GalleryLayerIntent& intent) {
-            const flecs::world w = e.world();
-            update_layer(e, intent, now(w), tree_rate(w));
-        });
-
-    world.observer<const GalleryTreeActivity>("GalleryTreeActivityObserver")
-        .event(flecs::OnSet)
-        .each([](flecs::entity e, const GalleryTreeActivity& activity) {
-            const flecs::world w = e.world();
-            const double t = now(w);
-            update_tree(e, activity, t);
-            w.each([&](flecs::entity layer, const GalleryLayerIntent& intent) { update_layer(layer, intent, t, activity.rate); });
-        });
 }
+
+struct GalleryModule {
+    explicit GalleryModule(flecs::world& world) {
+        world.module<GalleryModule>("engine::gallery");
+        using namespace game;
+
+        // Tree motion clock: elapsed + (now - started) * rate.
+        world.system<const GalleryTreeActivity>("GalleryTreeMotionSystem")
+            .kind(flecs::PreUpdate)
+            .each([](flecs::entity e, const GalleryTreeActivity& activity) { update_tree(e, activity, now(e.world())); });
+
+        // Ring turn: angle + (now - started) * speed * tree rate.
+        world.system<const GalleryLayerIntent>("GalleryRingMotionSystem")
+            .kind(flecs::PreUpdate)
+            .run([](flecs::iter& it) {
+                const flecs::world w = it.world();
+                const double t = now(w), rate = tree_rate(w);
+                while (it.next()) {
+                    auto intent = it.field<const GalleryLayerIntent>(0);
+                    for (auto i : it) update_layer(it.entity(i), intent[i], t, rate);
+                }
+            });
+
+        world.observer<const GalleryLayerIntent>("GalleryRingIntentObserver")
+            .event(flecs::OnSet)
+            .each([](flecs::entity e, const GalleryLayerIntent& intent) {
+                const flecs::world w = e.world();
+                update_layer(e, intent, now(w), tree_rate(w));
+            });
+
+        world.observer<const GalleryTreeActivity>("GalleryTreeActivityObserver")
+            .event(flecs::OnSet)
+            .each([](flecs::entity e, const GalleryTreeActivity& activity) {
+                const flecs::world w = e.world();
+                const double t = now(w);
+                update_tree(e, activity, t);
+                w.each([&](flecs::entity layer, const GalleryLayerIntent& intent) { update_layer(layer, intent, t, activity.rate); });
+            });
+    }
+};
 
 } // namespace
 
 void register_application(flecs::world& world) {
-    register_spin(world);
-    register_gallery_motion(world);
+    // Components at the root first, then the modules (import order = system order within a phase).
+    register_spin_components(world);
+    register_gallery_components(world);
+    world.import<SpinModule>();
+    world.import<GalleryModule>();
 }
 
 } // namespace flecs_unity
