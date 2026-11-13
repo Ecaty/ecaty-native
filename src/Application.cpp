@@ -6,12 +6,12 @@ namespace flecs_unity {
 namespace {
 
 void register_spin(flecs::world& world) {
-    world.component<ecaty::Spin>("Spin")
-        .member(&ecaty::Spin::x, "x")
-        .member(&ecaty::Spin::y, "y")
-        .member(&ecaty::Spin::z, "z");
+    world.component<game::Spin>("Spin")
+        .member(&game::Spin::x, "x")
+        .member(&game::Spin::y, "y")
+        .member(&game::Spin::z, "z");
 
-    using ecaty::Spin;
+    using game::Spin;
     world.system<Rotation, const Spin>("SpinSystem")
         .term_at(0).self() // Write an entity's own rotation, never its prefab's.
         .each([](flecs::iter& it, std::size_t row, Rotation& rotation, const Spin& speed) {
@@ -25,20 +25,20 @@ void register_spin(flecs::world& world) {
 
 double tree_rate(const flecs::world& w) {
     const flecs::entity settings = w.lookup("GalleryTreeSettings");
-    const ecaty::GalleryTreeActivity* activity = settings ? settings.try_get<ecaty::GalleryTreeActivity>() : nullptr;
+    const game::GalleryTreeActivity* activity = settings ? settings.try_get<game::GalleryTreeActivity>() : nullptr;
     return activity ? activity->rate : 1.0;
 }
 
-void update_layer(flecs::entity e, const ecaty::GalleryLayerIntent& intent, double now, double rate) {
+void update_layer(flecs::entity e, const game::GalleryLayerIntent& intent, double now, double rate) {
     const float turn = static_cast<float>(intent.angle + (now - intent.started) * intent.speed * rate);
-    const ecaty::GalleryLayerState* current = e.try_get<ecaty::GalleryLayerState>();
-    if (!current || current->turn != turn) e.set<ecaty::GalleryLayerState>({turn});
+    const game::GalleryLayerState* current = e.try_get<game::GalleryLayerState>();
+    if (!current || current->turn != turn) e.set<game::GalleryLayerState>({turn});
 }
 
-void update_tree(flecs::entity e, const ecaty::GalleryTreeActivity& activity, double now) {
+void update_tree(flecs::entity e, const game::GalleryTreeActivity& activity, double now) {
     const float time = static_cast<float>(activity.elapsed + (now - activity.started) * activity.rate);
-    const ecaty::GalleryTreeMotion* current = e.try_get<ecaty::GalleryTreeMotion>();
-    if (!current || current->time != time) e.set<ecaty::GalleryTreeMotion>({time});
+    const game::GalleryTreeMotion* current = e.try_get<game::GalleryTreeMotion>();
+    if (!current || current->time != time) e.set<game::GalleryTreeMotion>({time});
 }
 
 double now(const flecs::world& w) {
@@ -50,7 +50,7 @@ double now(const flecs::world& w) {
 // Script/C# write intents and activity; systems integrate them against Clock every tick, and
 // observers apply a write immediately so same-frame reads match the former reactive Script.
 void register_gallery_motion(flecs::world& world) {
-    using namespace ecaty;
+    using namespace game;
     world.component<GalleryTreeActivity>("GalleryTreeActivity")
         .member(&GalleryTreeActivity::rate, "rate")
         .member(&GalleryTreeActivity::draft, "draft")

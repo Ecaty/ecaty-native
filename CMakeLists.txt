@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-if(NOT TARGET ecaty_flecs_core)
+if(NOT TARGET flecs_unity_core)
   message(FATAL_ERROR "Configure the Unity project's Native directory, which composes Core and App.")
 endif()
 add_library(flecs_unity SHARED src/Application.cpp)
 target_include_directories(flecs_unity PRIVATE include)
-target_link_libraries(flecs_unity PRIVATE ecaty_flecs_core)
+target_link_libraries(flecs_unity PRIVATE flecs_unity_core)
 set_target_properties(flecs_unity PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 if(WIN32)
   # MinGW would name it libflecs_unity.dll; Unity and the smokes load flecs_unity.dll.

@@ -2,7 +2,7 @@
 #include "FlecsComponents.hpp"
 #include <cstdint>
 
-namespace ecaty {
+namespace game {
 struct Spin { float x, y, z; };
 
 // Gallery motion contracts (formerly declared in WorldGalleryTree.flecs). Layouts are mirrored by
