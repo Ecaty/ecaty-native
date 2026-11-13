@@ -5,12 +5,33 @@ namespace flecs_unity {
 
 namespace {
 
-void register_spin(flecs::world& world) {
-    world.component<game::Spin>("Spin")
-        .member(&game::Spin::x, "x")
-        .member(&game::Spin::y, "y")
-        .member(&game::Spin::z, "z");
+// Public component names stay at the root scope (Script, JSON and saves use them); systems and observers live in the
+// app module. Phases follow the map in Core/src/Modules.hpp: intents in PreUpdate, simulation in OnUpdate.
+void register_components(flecs::world& world) {
+    using namespace game;
+    world.component<Spin>("Spin")
+        .member(&Spin::x, "x")
+        .member(&Spin::y, "y")
+        .member(&Spin::z, "z");
+    world.component<GalleryTreeActivity>("GalleryTreeActivity")
+        .member(&GalleryTreeActivity::rate, "rate")
+        .member(&GalleryTreeActivity::draft, "draft")
+        .member(&GalleryTreeActivity::sequence, "sequence")
+        .member(&GalleryTreeActivity::elapsed, "elapsed")
+        .member(&GalleryTreeActivity::started, "started");
+    world.component<GalleryTreeMotion>("GalleryTreeMotion")
+        .member(&GalleryTreeMotion::time, "time");
+    world.component<GalleryLayerIntent>("GalleryLayerIntent")
+        .member(&GalleryLayerIntent::angle, "angle")
+        .member(&GalleryLayerIntent::speed, "speed")
+        .member(&GalleryLayerIntent::started, "started")
+        .member(&GalleryLayerIntent::glowPhase, "glowPhase")
+        .member(&GalleryLayerIntent::glowRate, "glowRate");
+    world.component<GalleryLayerState>("GalleryLayerState")
+        .member(&GalleryLayerState::turn, "turn");
+}
 
+void register_spin(flecs::world& world) {
     using game::Spin;
     world.system<Rotation, const Spin>("SpinSystem")
         .term_at(0).self() // Write an entity's own rotation, never its prefab's.
@@ -51,23 +72,6 @@ double now(const flecs::world& w) {
 // observers apply a write immediately so same-frame reads match the former reactive Script.
 void register_gallery_motion(flecs::world& world) {
     using namespace game;
-    world.component<GalleryTreeActivity>("GalleryTreeActivity")
-        .member(&GalleryTreeActivity::rate, "rate")
-        .member(&GalleryTreeActivity::draft, "draft")
-        .member(&GalleryTreeActivity::sequence, "sequence")
-        .member(&GalleryTreeActivity::elapsed, "elapsed")
-        .member(&GalleryTreeActivity::started, "started");
-    world.component<GalleryTreeMotion>("GalleryTreeMotion")
-        .member(&GalleryTreeMotion::time, "time");
-    world.component<GalleryLayerIntent>("GalleryLayerIntent")
-        .member(&GalleryLayerIntent::angle, "angle")
-        .member(&GalleryLayerIntent::speed, "speed")
-        .member(&GalleryLayerIntent::started, "started")
-        .member(&GalleryLayerIntent::glowPhase, "glowPhase")
-        .member(&GalleryLayerIntent::glowRate, "glowRate");
-    world.component<GalleryLayerState>("GalleryLayerState")
-        .member(&GalleryLayerState::turn, "turn");
-
     // Tree motion clock: elapsed + (now - started) * rate.
     world.system<const GalleryTreeActivity>("GalleryTreeMotionSystem")
         .kind(flecs::PreUpdate)
@@ -102,11 +106,19 @@ void register_gallery_motion(flecs::world& world) {
         });
 }
 
+struct AppModule {
+    explicit AppModule(flecs::world& world) {
+        const ecs_entity_t scope = ecs_set_scope(world, 0);
+        register_components(world);
+        ecs_set_scope(world, scope);
+        world.module<AppModule>("::app");
+        register_spin(world);
+        register_gallery_motion(world);
+    }
+};
+
 } // namespace
 
-void register_application(flecs::world& world) {
-    register_spin(world);
-    register_gallery_motion(world);
-}
+void register_application(flecs::world& world) { world.import<AppModule>(); }
 
 } // namespace flecs_unity
