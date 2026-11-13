@@ -52,7 +52,7 @@ double now(const flecs::world& w) {
     return clock ? clock->time : 0.0;
 }
 
-// Continuous gallery motion runs as compiled systems (docs/FLECS-ARCHITECTURE-AUDIT.md):
+// Continuous gallery motion runs as compiled systems (https://github.com/Ecaty/flecs-native/blob/main/docs/FLECS-ARCHITECTURE-AUDIT.md):
 // Script/C# write intents and activity; systems integrate them against Clock every tick, and
 // observers apply a write immediately so same-frame reads match the former reactive Script.
 void register_gallery_components(flecs::world& world) {
