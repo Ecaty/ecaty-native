@@ -1,5 +1,9 @@
 #include "Application.hpp"
+#include <algorithm>
 #include <cmath>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace flecs_unity {
 
@@ -7,7 +11,12 @@ namespace {
 
 // Public component names stay at the root scope (Script, JSON and saves use them); systems and observers live in the
 // app module. Phases follow the map in Core/src/Modules.hpp: intents in PreUpdate, simulation in OnUpdate.
-void register_components(flecs::world& world) {
+void brief(flecs::world& world, const char* path, const char* text) {
+    if (const ecs_entity_t e = ecs_lookup(world, path)) ecs_doc_set_brief(world, e, text);
+}
+
+// Returns the GalleryOnLayer relationship.
+flecs::entity register_components(flecs::world& world) {
     using namespace game;
     world.component<Spin>("Spin")
         .member(&Spin::x, "x")
@@ -29,6 +38,29 @@ void register_components(flecs::world& world) {
         .member(&GalleryLayerIntent::glowRate, "glowRate");
     world.component<GalleryLayerState>("GalleryLayerState")
         .member(&GalleryLayerState::turn, "turn");
+    world.component<GalleryEntry>("GalleryEntry")
+        .member(&GalleryEntry::order, "order")
+        .member(&GalleryEntry::width, "width")
+        .member(&GalleryEntry::depth, "depth")
+        .member(&GalleryEntry::kind, "kind")
+        .member(&GalleryEntry::active, "active");
+    world.component<GalleryPlacement>("GalleryPlacement")
+        .member(&GalleryPlacement::layer, "layer")
+        .member(&GalleryPlacement::slot, "slot");
+    // (GalleryOnLayer, GalleryTreeLayer<n>): the ring a gallery world sits on. A world is on one ring only.
+    const flecs::entity relation = world.entity("GalleryOnLayer").add(flecs::Exclusive);
+
+    brief(world, "GalleryEntry", "A world in the gallery catalog. Active entries are placed on rings by their order.");
+    brief(world, "GalleryEntry.order", "Position in the gallery: lower comes first. Ties are broken by the entity name.");
+    brief(world, "GalleryEntry.width", "Fixture width of the preview; every world uses one gallery cell.");
+    brief(world, "GalleryEntry.depth", "Fixture depth of the preview; every world uses one gallery cell.");
+    brief(world, "GalleryEntry.kind", "Which preview fixture or creation kind the world shows.");
+    brief(world, "GalleryEntry.active", "False hides the world from the gallery; it keeps its record but has no ring.");
+    brief(world, "GalleryPlacement", "Where an active gallery world sits, derived from GalleryEntry by the app module. Do not write it.");
+    brief(world, "GalleryPlacement.layer", "Ring number from 1. Ring n holds 6 times n worlds.");
+    brief(world, "GalleryPlacement.slot", "Position on the ring from 0, in gallery order.");
+    brief(world, "GalleryOnLayer", "Relationship to the GalleryTreeLayer<n> entity of the ring the world sits on. Kept by the app module.");
+    return relation;
 }
 
 void register_spin(flecs::world& world) {
@@ -106,14 +138,81 @@ void register_gallery_motion(flecs::world& world) {
         });
 }
 
+// The ring of a world is a pure function of the active catalog: sort by (order, entity name), fill ring 1 with 6, ring 2 with 12,
+// ring L with 6 * L. It is recomputed when an entry is set or removed, never per frame. Only values that differ are written.
+// An entry that is not active, or was removed, loses its ring pair; its last GalleryPlacement stays as it was.
+struct RingRow {
+    flecs::entity entity;
+    std::int32_t order;
+    bool active;
+};
+
+flecs::entity ring_layer(const flecs::world& w, std::int32_t layer) {
+    const std::string name = "GalleryTreeLayer" + std::to_string(layer);
+    const ecs_entity_t scope = ecs_set_scope(w, 0);
+    flecs::entity found = w.lookup(name.c_str());
+    if (!found) found = w.entity(name.c_str());
+    ecs_set_scope(w, scope);
+    return found;
+}
+
+void assign_rings(const flecs::world& w, flecs::entity_t relation, flecs::entity removed) {
+    static thread_local bool running = false; // the writes below never touch GalleryEntry, so this is only a safety net
+    if (running || ecs_is_fini(w)) return; // a world that is being destroyed removes every entry: nothing to place
+    running = true;
+    using namespace game;
+    std::vector<RingRow> rows;
+    w.query_builder<const GalleryEntry>().build().each([&](flecs::entity e, const GalleryEntry& entry) {
+        if (e != removed) rows.push_back({e, entry.order, entry.active});
+    });
+    std::vector<RingRow*> active;
+    for (RingRow& row : rows) {
+        if (row.active) active.push_back(&row);
+        else if (row.entity.has(relation, flecs::Wildcard)) row.entity.remove(relation, flecs::Wildcard);
+    }
+    if (removed && removed.has(relation, flecs::Wildcard)) removed.remove(relation, flecs::Wildcard);
+    std::sort(active.begin(), active.end(), [](const RingRow* a, const RingRow* b) {
+        if (a->order != b->order) return a->order < b->order;
+        const char* nameA = a->entity.name().c_str();
+        const char* nameB = b->entity.name().c_str();
+        const std::string_view x = nameA ? nameA : "", y = nameB ? nameB : "";
+        const int byName = x.compare(y); // bytes, not culture
+        return byName != 0 ? byName < 0 : a->entity.id() < b->entity.id();
+    });
+    std::int32_t layer = 1, slot = 0;
+    flecs::entity layerEntity;
+    std::int32_t layerEntityOf = 0;
+    for (const RingRow* row : active) {
+        if (slot == layer * 6) { ++layer; slot = 0; }
+        const GalleryPlacement wanted{layer, slot++};
+        const GalleryPlacement* current = row->entity.try_get<GalleryPlacement>();
+        if (!current || current->layer != wanted.layer || current->slot != wanted.slot) row->entity.set<GalleryPlacement>(wanted);
+        if (layerEntityOf != layer) { layerEntity = ring_layer(w, layer); layerEntityOf = layer; }
+        if (!row->entity.has(relation, layerEntity)) row->entity.add(relation, layerEntity);
+    }
+    running = false;
+}
+
+void register_gallery_rings(flecs::world& world, flecs::entity relation) {
+    using namespace game;
+    const flecs::entity_t rel = relation.id();
+    world.observer<const GalleryEntry>("GalleryRingAssignSetObserver")
+        .event(flecs::OnSet)
+        .each([rel](flecs::entity e, const GalleryEntry&) { assign_rings(e.world(), rel, flecs::entity()); });
+    world.observer<const GalleryEntry>("GalleryRingAssignRemoveObserver")
+        .event(flecs::OnRemove)
+        .each([rel](flecs::entity e, const GalleryEntry&) { assign_rings(e.world(), rel, e); });
+}
+
 struct AppModule {
     explicit AppModule(flecs::world& world) {
         const ecs_entity_t scope = ecs_set_scope(world, 0);
-        register_components(world);
+        const flecs::entity relation = register_components(world);
         ecs_set_scope(world, scope);
         world.module<AppModule>("::app");
         register_spin(world);
         register_gallery_motion(world);
+        register_gallery_rings(world, relation);
     }
 };
 
