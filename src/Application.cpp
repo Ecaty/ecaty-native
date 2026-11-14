@@ -158,7 +158,8 @@ flecs::entity ring_layer(const flecs::world& w, std::int32_t layer) {
 
 void assign_rings(const flecs::world& w, flecs::entity_t relation, flecs::entity removed) {
     static thread_local bool running = false; // the writes below never touch GalleryEntry, so this is only a safety net
-    if (running || ecs_is_fini(w)) return; // a world that is being destroyed removes every entry: nothing to place
+    // Flecs sets "quit" first and "fini" only after it deleted its root entities, so both are checked.
+    if (running || ecs_should_quit(w) || ecs_is_fini(w)) return; // a world that is being destroyed removes every entry: nothing to place
     running = true;
     using namespace game;
     std::vector<RingRow> rows;
